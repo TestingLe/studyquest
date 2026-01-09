@@ -2,10 +2,9 @@ import React, { useState, useRef } from 'react';
 import HCaptcha from '@hcaptcha/react-hcaptcha';
 import { playSound } from '../utils/sounds';
 import { registerUser, loginUser } from '../utils/supabaseApi';
-import { isSupabaseConfigured as checkSupabase } from '../utils/supabase';
 
-// hCaptcha site key - get yours from https://dashboard.hcaptcha.com
-const HCAPTCHA_SITE_KEY = import.meta.env.VITE_HCAPTCHA_SITE_KEY || '10000000-ffff-ffff-ffff-000000000001'; // Test key
+// hCaptcha site key
+const HCAPTCHA_SITE_KEY = import.meta.env.VITE_HCAPTCHA_SITE_KEY || '10000000-ffff-ffff-ffff-000000000001';
 
 interface User {
   id: string;
@@ -24,7 +23,6 @@ export const Auth: React.FC<AuthProps> = ({ onLogin, darkMode }) => {
   const [isLogin, setIsLogin] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [useLocalMode, setUseLocalMode] = useState(!checkSupabase());
   const [captchaToken, setCaptchaToken] = useState<string | null>(null);
   
   // Form fields
@@ -36,75 +34,11 @@ export const Auth: React.FC<AuthProps> = ({ onLogin, darkMode }) => {
 
   const captchaRef = useRef<HCaptcha>(null);
 
-  // Local storage auth (fallback when no backend)
-  const handleLocalAuth = () => {
-    playSound('click');
-    
-    if (!isLogin) {
-      // Register locally
-      if (password !== confirmPassword) {
-        setError('Passwords do not match');
-        return;
-      }
-      if (username.length < 3) {
-        setError('Username must be at least 3 characters');
-        return;
-      }
-      
-      // Check if user exists
-      const users = JSON.parse(localStorage.getItem('studyquest-users') || '[]');
-      if (users.find((u: any) => u.username === username)) {
-        setError('Username already exists');
-        return;
-      }
-      
-      // Create user
-      const newUser = {
-        id: Date.now().toString(),
-        username,
-        email: email || `${username}@local`,
-        displayName: displayName || username,
-        avatar: '🎓',
-        password // In real app, hash this!
-      };
-      
-      users.push(newUser);
-      localStorage.setItem('studyquest-users', JSON.stringify(users));
-      
-      const token = `local-${newUser.id}-${Date.now()}`;
-      playSound('complete');
-      onLogin(newUser, token);
-    } else {
-      // Login locally
-      const users = JSON.parse(localStorage.getItem('studyquest-users') || '[]');
-      const user = users.find((u: any) => 
-        (u.username === username || u.email === username) && u.password === password
-      );
-      
-      if (!user) {
-        playSound('wrong');
-        setError('Invalid username/email or password');
-        return;
-      }
-      
-      const token = `local-${user.id}-${Date.now()}`;
-      playSound('complete');
-      onLogin(user, token);
-    }
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     playSound('click');
     setError('');
     setLoading(true);
-
-    // Use local mode if selected or Supabase not configured
-    if (useLocalMode || !checkSupabase()) {
-      handleLocalAuth();
-      setLoading(false);
-      return;
-    }
 
     // Check captcha for registration (not login)
     if (!isLogin && !captchaToken) {
@@ -136,7 +70,7 @@ export const Auth: React.FC<AuthProps> = ({ onLogin, darkMode }) => {
         playSound('complete');
         onLogin(result.user, result.token);
       } else {
-        // Login - use email field (username field can contain email)
+        // Login
         const loginEmail = username.includes('@') ? username : email || username;
         
         if (!loginEmail.includes('@')) {
@@ -167,8 +101,6 @@ export const Auth: React.FC<AuthProps> = ({ onLogin, darkMode }) => {
     setCaptchaToken(null);
     captchaRef.current?.resetCaptcha();
   };
-
-  const supabaseConfigured = checkSupabase();
 
   return (
     <div className={`min-h-screen flex items-center justify-center p-4 ${
@@ -280,7 +212,7 @@ export const Auth: React.FC<AuthProps> = ({ onLogin, darkMode }) => {
           )}
 
           {/* hCaptcha - only show for registration */}
-          {!isLogin && !useLocalMode && (
+          {!isLogin && (
             <div className="flex justify-center">
               <HCaptcha
                 ref={captchaRef}
@@ -315,32 +247,11 @@ export const Auth: React.FC<AuthProps> = ({ onLogin, darkMode }) => {
               {isLogin ? 'Sign up' : 'Login'}
             </button>
           </p>
-
-          {/* Offline mode toggle */}
-          <div className={`mt-4 pt-4 border-t ${darkMode ? 'border-gray-700' : 'border-gray-200'}`}>
-            <label className="flex items-center justify-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={useLocalMode}
-                onChange={() => { playSound('click'); setUseLocalMode(!useLocalMode); }}
-                className="w-4 h-4 rounded border-gray-300 text-indigo-500 focus:ring-indigo-500"
-              />
-              <span className={`text-sm ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
-                Offline Mode (data stored locally)
-              </span>
-            </label>
-          </div>
         </form>
 
         {/* Info */}
         <div className={`px-8 pb-6 text-center text-xs ${darkMode ? 'text-gray-500' : 'text-gray-400'}`}>
-          {useLocalMode ? (
-            <p>📱 Data will be stored locally in your browser</p>
-          ) : supabaseConfigured ? (
-            <p>☁️ Data synced to cloud - access from anywhere!</p>
-          ) : (
-            <p>⚠️ Cloud not configured - using offline mode</p>
-          )}
+          <p>☁️ Data synced to cloud - access from anywhere!</p>
         </div>
       </div>
     </div>
