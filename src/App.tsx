@@ -311,7 +311,7 @@ function App() {
       case 'quiz':
         return <Quiz darkMode={darkMode} />;
       case 'rooms':
-        return <StudyRooms userName={user.displayName} userAvatar={user.avatar} />;
+        return <StudyRooms userId={user.id} userName={user.displayName} userAvatar={user.avatar} />;
       default:
         return <Dashboard studyData={studyData} userName={user.displayName} />;
     }
