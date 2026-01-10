@@ -1,10 +1,10 @@
 import React, { useState, useRef } from 'react';
-import HCaptcha from '@hcaptcha/react-hcaptcha';
+import { Turnstile, TurnstileInstance } from 'react-turnstile';
 import { playSound } from '../utils/sounds';
 import { registerUser, loginUser } from '../utils/supabaseApi';
 
-// hCaptcha site key
-const HCAPTCHA_SITE_KEY = import.meta.env.VITE_HCAPTCHA_SITE_KEY || '10000000-ffff-ffff-ffff-000000000001';
+// Cloudflare Turnstile site key
+const TURNSTILE_SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY || '1x00000000000000000000AA';
 
 interface User {
   id: string;
@@ -32,7 +32,7 @@ export const Auth: React.FC<AuthProps> = ({ onLogin, darkMode }) => {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
 
-  const captchaRef = useRef<HCaptcha>(null);
+  const captchaRef = useRef<TurnstileInstance>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -87,7 +87,7 @@ export const Auth: React.FC<AuthProps> = ({ onLogin, darkMode }) => {
       playSound('wrong');
       setError(err.message || 'Something went wrong');
       // Reset captcha on error
-      captchaRef.current?.resetCaptcha();
+      captchaRef.current?.reset();
       setCaptchaToken(null);
     } finally {
       setLoading(false);
@@ -99,7 +99,7 @@ export const Auth: React.FC<AuthProps> = ({ onLogin, darkMode }) => {
     setIsLogin(!isLogin);
     setError('');
     setCaptchaToken(null);
-    captchaRef.current?.resetCaptcha();
+    captchaRef.current?.reset();
   };
 
   return (
@@ -211,12 +211,12 @@ export const Auth: React.FC<AuthProps> = ({ onLogin, darkMode }) => {
             </div>
           )}
 
-          {/* hCaptcha - show for both login and registration */}
+          {/* Cloudflare Turnstile - show for both login and registration */}
           <div className="flex justify-center">
-            <HCaptcha
+            <Turnstile
               ref={captchaRef}
-              sitekey={HCAPTCHA_SITE_KEY}
-              onVerify={(token) => setCaptchaToken(token)}
+              siteKey={TURNSTILE_SITE_KEY}
+              onSuccess={(token) => setCaptchaToken(token)}
               onExpire={() => setCaptchaToken(null)}
               onError={() => setCaptchaToken(null)}
               theme={darkMode ? 'dark' : 'light'}
