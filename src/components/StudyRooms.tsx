@@ -200,7 +200,10 @@ export const StudyRooms: React.FC<StudyRoomsProps> = ({
     if (!newMutedState && streamRef.current) startVoiceDetection(streamRef.current);
     setIsMuted(newMutedState);
     if (newMutedState) setIsSpeaking(false);
-  }, [isMuted, startVoiceDetection]);
+    
+    // Broadcast media state to other participants
+    webrtcRef.current?.broadcastMediaState(newMutedState, isVideoOn);
+  }, [isMuted, isVideoOn, startVoiceDetection]);
 
   const toggleVideo = useCallback(async () => {
     if (!isVideoOn) {
@@ -217,6 +220,8 @@ export const StudyRooms: React.FC<StudyRoomsProps> = ({
         startVoiceDetection(stream);
         webrtcRef.current?.updateStream(stream);
         setIsVideoOn(true);
+        // Broadcast media state
+        webrtcRef.current?.broadcastMediaState(isMuted, true);
       } catch (err: any) {
         alert(err.name === 'NotAllowedError' ? 'Camera permission denied.' : 'Could not access camera.');
       } finally { setIsVideoLoading(false); }
@@ -229,6 +234,8 @@ export const StudyRooms: React.FC<StudyRoomsProps> = ({
       }
       if (videoRef.current) videoRef.current.srcObject = null;
       setIsVideoOn(false);
+      // Broadcast media state
+      webrtcRef.current?.broadcastMediaState(isMuted, false);
     }
   }, [isVideoOn, isMuted, startVoiceDetection]);
 
@@ -363,7 +370,13 @@ export const StudyRooms: React.FC<StudyRoomsProps> = ({
               <div key={participant.odId} className={`relative bg-gray-800 rounded-2xl overflow-hidden ${participant.isSpeaking ? 'ring-4 ring-green-500' : ''}`}>
                 {participant.stream && participant.isVideoOn ? (
                   <video
-                    ref={(el) => setParticipantVideoRef(participant.odId, el)}
+                    ref={(el) => {
+                      setParticipantVideoRef(participant.odId, el);
+                      if (el && participant.stream && el.srcObject !== participant.stream) {
+                        el.srcObject = participant.stream;
+                        el.play().catch(e => console.log('Video play error:', e));
+                      }
+                    }}
                     autoPlay
                     playsInline
                     className="w-full h-full object-cover min-h-[200px]"
@@ -373,18 +386,31 @@ export const StudyRooms: React.FC<StudyRoomsProps> = ({
                     <div className={`w-20 h-20 rounded-full bg-purple-500 flex items-center justify-center text-4xl ${participant.isSpeaking ? 'ring-4 ring-green-500 scale-110' : ''}`}>
                       {participant.odAvatar}
                     </div>
+                    {participant.stream && (
+                      <p className="text-green-400 text-xs mt-2">🔊 Connected</p>
+                    )}
                   </div>
                 )}
                 <div className="absolute bottom-3 left-3 flex items-center gap-2">
                   <span className={`px-2 py-1 rounded text-xs font-medium ${participant.isSpeaking ? 'bg-green-500 text-white' : 'bg-black/60 text-white'}`}>{participant.odName}</span>
                   {participant.isMuted && <span className="bg-red-500 text-white px-2 py-1 rounded text-xs">🔇</span>}
+                  {!participant.isMuted && !participant.stream && <span className="bg-yellow-500 text-black px-2 py-1 rounded text-xs">⏳ Connecting...</span>}
                 </div>
-                {/* Hidden audio element for participant */}
+                {/* Audio element for participant - always render if stream exists */}
                 {participant.stream && (
                   <audio
-                    ref={(el) => { if (el && participant.stream) el.srcObject = participant.stream; }}
+                    ref={(el) => {
+                      if (el && participant.stream) {
+                        if (el.srcObject !== participant.stream) {
+                          console.log('Setting audio srcObject for:', participant.odId, 'tracks:', participant.stream.getTracks().map(t => `${t.kind}:${t.enabled}`));
+                          el.srcObject = participant.stream;
+                          el.play().catch(e => console.log('Audio play error:', e));
+                        }
+                      }
+                    }}
                     autoPlay
                     playsInline
+                    style={{ display: 'none' }}
                   />
                 )}
               </div>

@@ -1,12 +1,31 @@
 import { supabase } from './supabase';
 
-// WebRTC configuration with free STUN servers
+// WebRTC configuration with STUN and free TURN servers
 const rtcConfig: RTCConfiguration = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:stun2.l.google.com:19302' },
-  ]
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' },
+    // Free TURN servers from Open Relay Project
+    {
+      urls: 'turn:openrelay.metered.ca:80',
+      username: 'openrelayproject',
+      credential: 'openrelayproject'
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443',
+      username: 'openrelayproject',
+      credential: 'openrelayproject'
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+      username: 'openrelayproject',
+      credential: 'openrelayproject'
+    }
+  ],
+  iceCandidatePoolSize: 10
 };
 
 export interface Participant {
@@ -35,6 +54,8 @@ export class WebRTCManager {
   private participants: Map<string, Participant> = new Map();
   private channel: any = null;
   private onParticipantsChange: ParticipantHandler;
+  private pendingCandidates: Map<string, RTCIceCandidate[]> = new Map();
+  private isNegotiating: Map<string, boolean> = new Map();
 
   constructor(
     userId: string,
@@ -55,7 +76,10 @@ export class WebRTCManager {
 
     // Subscribe to room channel for signaling
     this.channel = supabase.channel(`room:${this.roomId}`, {
-      config: { presence: { key: this.odId } }
+      config: { 
+        presence: { key: this.odId },
+        broadcast: { self: false, ack: true }
+      }
     });
 
     // Handle presence (who's in the room)
@@ -78,20 +102,85 @@ export class WebRTCManager {
 
     // Handle WebRTC signaling messages
     this.channel.on('broadcast', { event: 'signal' }, ({ payload }: any) => {
+      console.log('Received signal broadcast:', payload.from, '->', payload.to, payload.data?.type);
       if (payload.to === this.odId) {
         this.handleSignal(payload);
       }
     });
 
+    // Handle media state updates (mute/video toggle)
+    this.channel.on('broadcast', { event: 'mediaState' }, ({ payload }: any) => {
+      console.log('Received mediaState broadcast:', payload);
+      if (payload.odId !== this.odId) {
+        this.handleMediaStateUpdate(payload);
+      }
+    });
+
     await this.channel.subscribe(async (status: string) => {
+      console.log('Channel subscription status:', status);
       if (status === 'SUBSCRIBED') {
         await this.channel.track({
           odId: this.odId,
           odName: this.odName,
           odAvatar: this.odAvatar,
+          isMuted: true,
+          isVideoOn: false,
           joinedAt: new Date().toISOString()
         });
       }
+    });
+  }
+
+  private handleMediaStateUpdate(payload: { odId: string; isMuted: boolean; isVideoOn: boolean }) {
+    console.log('Media state update from:', payload.odId, 'muted:', payload.isMuted, 'video:', payload.isVideoOn);
+    const participant = this.participants.get(payload.odId);
+    if (participant) {
+      console.log('Updating participant:', payload.odId, 'old muted:', participant.isMuted, 'new muted:', payload.isMuted);
+      participant.isMuted = payload.isMuted;
+      participant.isVideoOn = payload.isVideoOn;
+      this.participants.set(payload.odId, participant);
+      this.onParticipantsChange(new Map(this.participants));
+    } else {
+      console.log('Participant not found for media state update:', payload.odId, 'known participants:', Array.from(this.participants.keys()));
+      // Create participant if not exists
+      this.participants.set(payload.odId, {
+        odId: payload.odId,
+        odName: 'User',
+        odAvatar: '🎓',
+        userId: payload.odId,
+        userName: 'User',
+        userAvatar: '🎓',
+        isMuted: payload.isMuted,
+        isVideoOn: payload.isVideoOn
+      });
+      this.onParticipantsChange(new Map(this.participants));
+    }
+  }
+
+  // Broadcast local media state to all participants
+  async broadcastMediaState(isMuted: boolean, isVideoOn: boolean) {
+    console.log('Broadcasting media state - muted:', isMuted, 'video:', isVideoOn);
+    
+    // Send broadcast message
+    const result = await this.channel?.send({
+      type: 'broadcast',
+      event: 'mediaState',
+      payload: {
+        odId: this.odId,
+        isMuted,
+        isVideoOn
+      }
+    });
+    console.log('Broadcast result:', result);
+    
+    // Also update presence so new joiners get the state
+    await this.channel?.track({
+      odId: this.odId,
+      odName: this.odName,
+      odAvatar: this.odAvatar,
+      isMuted,
+      isVideoOn,
+      joinedAt: new Date().toISOString()
     });
   }
 
@@ -111,9 +200,18 @@ export class WebRTCManager {
           userId: odId,
           userName: name,
           userAvatar: avatar,
-          isMuted: true,
-          isVideoOn: false
+          isMuted: userData.isMuted !== false, // Default to muted
+          isVideoOn: userData.isVideoOn === true
         });
+      } else if (odId !== this.odId) {
+        // Update existing participant's media state from presence
+        const userData = state[odId][0];
+        const participant = this.participants.get(odId);
+        if (participant) {
+          participant.isMuted = userData.isMuted !== false;
+          participant.isVideoOn = userData.isVideoOn === true;
+          this.participants.set(odId, participant);
+        }
       }
     });
 
@@ -132,48 +230,99 @@ export class WebRTCManager {
     
     const pc = this.createPeerConnection(targetId, userData);
     
-    // Add local tracks
+    // Add local tracks if available
     if (this.localStream) {
+      console.log('Adding local tracks to peer connection');
       this.localStream.getTracks().forEach(track => {
+        console.log('Adding track:', track.kind, track.enabled);
         pc.addTrack(track, this.localStream!);
       });
+    } else {
+      // Add transceiver for audio/video even without stream to allow receiving
+      console.log('No local stream, adding transceivers for receiving');
+      pc.addTransceiver('audio', { direction: 'recvonly' });
+      pc.addTransceiver('video', { direction: 'recvonly' });
     }
 
     // Create and send offer
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-
-    this.sendSignal(targetId, { type: 'offer', sdp: offer.sdp });
+    try {
+      this.isNegotiating.set(targetId, true);
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      console.log('Sending offer to:', targetId);
+      this.sendSignal(targetId, { type: 'offer', sdp: offer.sdp });
+    } catch (err) {
+      console.error('Error creating offer:', err);
+      this.isNegotiating.set(targetId, false);
+    }
   }
 
   private createPeerConnection(targetId: string, userData: any): RTCPeerConnection {
+    // Close existing connection if any
+    const existingPc = this.peerConnections.get(targetId);
+    if (existingPc) {
+      existingPc.close();
+    }
+
     const pc = new RTCPeerConnection(rtcConfig);
     this.peerConnections.set(targetId, pc);
+    this.pendingCandidates.set(targetId, []);
+    this.isNegotiating.set(targetId, false);
 
     // Handle ICE candidates
     pc.onicecandidate = (event) => {
       if (event.candidate) {
-        this.sendSignal(targetId, { type: 'ice', candidate: event.candidate });
+        console.log('Sending ICE candidate to:', targetId);
+        this.sendSignal(targetId, { type: 'ice', candidate: event.candidate.toJSON() });
       }
+    };
+
+    pc.onicegatheringstatechange = () => {
+      console.log(`ICE gathering state with ${targetId}:`, pc.iceGatheringState);
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      console.log(`ICE connection state with ${targetId}:`, pc.iceConnectionState);
     };
 
     // Handle incoming tracks
     pc.ontrack = (event) => {
-      console.log('Received track from:', targetId);
+      console.log('Received track from:', targetId, 'kind:', event.track.kind);
       const participant = this.participants.get(targetId);
       if (participant) {
-        participant.stream = event.streams[0];
-        participant.isVideoOn = event.streams[0].getVideoTracks().length > 0;
+        // Use the first stream or create one from the track
+        const stream = event.streams[0] || new MediaStream([event.track]);
+        participant.stream = stream;
+        participant.isVideoOn = stream.getVideoTracks().some(t => t.enabled);
+        participant.isMuted = !stream.getAudioTracks().some(t => t.enabled);
         this.participants.set(targetId, participant);
+        console.log('Updated participant stream:', targetId, 'video:', participant.isVideoOn, 'audio:', !participant.isMuted);
         this.onParticipantsChange(new Map(this.participants));
       }
     };
 
     pc.onconnectionstatechange = () => {
       console.log(`Connection state with ${targetId}:`, pc.connectionState);
-      if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
-        this.handleUserLeft(targetId);
+      if (pc.connectionState === 'connected') {
+        console.log('Peer connection established with:', targetId);
       }
+      if (pc.connectionState === 'failed') {
+        console.log('Connection failed with:', targetId, '- attempting restart');
+        pc.restartIce();
+      }
+      if (pc.connectionState === 'disconnected') {
+        // Give it a moment to reconnect before removing
+        setTimeout(() => {
+          if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
+            this.handleUserLeft(targetId);
+          }
+        }, 5000);
+      }
+    };
+
+    pc.onnegotiationneeded = async () => {
+      console.log('Negotiation needed event with:', targetId);
+      // We handle renegotiation manually in updateStream, so just log here
     };
 
     // Initialize participant if not exists
@@ -197,7 +346,7 @@ export class WebRTCManager {
 
   private async handleSignal(payload: any) {
     const { from, data } = payload;
-    console.log('Received signal from:', from, data.type);
+    console.log('Received signal from:', from, 'type:', data.type);
 
     let pc = this.peerConnections.get(from);
 
@@ -205,25 +354,70 @@ export class WebRTCManager {
       // Create peer connection if doesn't exist
       if (!pc) {
         pc = this.createPeerConnection(from, {});
-        
-        // Add local tracks
-        if (this.localStream) {
-          this.localStream.getTracks().forEach(track => {
-            pc!.addTrack(track, this.localStream!);
-          });
-        }
       }
 
-      await pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp: data.sdp }));
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      this.sendSignal(from, { type: 'answer', sdp: answer.sdp });
+      // Add local tracks if available
+      if (this.localStream) {
+        const senders = pc.getSenders();
+        this.localStream.getTracks().forEach(track => {
+          const existingSender = senders.find(s => s.track?.kind === track.kind);
+          if (!existingSender) {
+            console.log('Adding local track to answer:', track.kind);
+            pc!.addTrack(track, this.localStream!);
+          }
+        });
+      }
+
+      try {
+        await pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp: data.sdp }));
+        
+        // Add any pending ICE candidates
+        const pending = this.pendingCandidates.get(from) || [];
+        for (const candidate of pending) {
+          await pc.addIceCandidate(candidate);
+        }
+        this.pendingCandidates.set(from, []);
+
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        console.log('Sending answer to:', from);
+        this.sendSignal(from, { type: 'answer', sdp: answer.sdp });
+      } catch (err) {
+        console.error('Error handling offer:', err);
+      }
 
     } else if (data.type === 'answer' && pc) {
-      await pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: data.sdp }));
+      try {
+        await pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: data.sdp }));
+        this.isNegotiating.set(from, false);
+        
+        // Add any pending ICE candidates
+        const pending = this.pendingCandidates.get(from) || [];
+        for (const candidate of pending) {
+          await pc.addIceCandidate(candidate);
+        }
+        this.pendingCandidates.set(from, []);
+        console.log('Answer processed from:', from);
+      } catch (err) {
+        console.error('Error handling answer:', err);
+      }
 
-    } else if (data.type === 'ice' && pc) {
-      await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+    } else if (data.type === 'ice') {
+      try {
+        const candidate = new RTCIceCandidate(data.candidate);
+        if (pc && pc.remoteDescription) {
+          await pc.addIceCandidate(candidate);
+          console.log('Added ICE candidate from:', from);
+        } else {
+          // Queue the candidate if remote description not set yet
+          console.log('Queuing ICE candidate from:', from);
+          const pending = this.pendingCandidates.get(from) || [];
+          pending.push(candidate);
+          this.pendingCandidates.set(from, pending);
+        }
+      } catch (err) {
+        console.error('Error adding ICE candidate:', err);
+      }
     }
   }
 
@@ -236,40 +430,123 @@ export class WebRTCManager {
   }
 
   private handleUserLeft(odId: string) {
+    console.log('Handling user left:', odId);
     const pc = this.peerConnections.get(odId);
     if (pc) {
       pc.close();
       this.peerConnections.delete(odId);
     }
+    this.pendingCandidates.delete(odId);
+    this.isNegotiating.delete(odId);
     this.participants.delete(odId);
     this.onParticipantsChange(new Map(this.participants));
   }
 
   updateStream(stream: MediaStream | null) {
+    console.log('Updating stream:', stream ? `${stream.getTracks().length} tracks` : 'null');
+    const previousStream = this.localStream;
     this.localStream = stream;
     
     // Update all peer connections with new tracks
-    this.peerConnections.forEach((pc, _odId) => {
+    this.peerConnections.forEach(async (pc, odId) => {
       const senders = pc.getSenders();
+      const transceivers = pc.getTransceivers();
+      console.log(`Updating peer ${odId}, senders:`, senders.length, 'transceivers:', transceivers.length, 'state:', pc.connectionState);
       
       if (stream) {
+        let needsRenegotiation = false;
+        
         stream.getTracks().forEach(track => {
+          // First try to find an existing sender with a track of the same kind
           const sender = senders.find(s => s.track?.kind === track.kind);
+          
           if (sender) {
-            sender.replaceTrack(track);
+            console.log(`Replacing ${track.kind} track for ${odId}`);
+            sender.replaceTrack(track).catch(err => {
+              console.error('Error replacing track:', err);
+            });
           } else {
-            pc.addTrack(track, stream);
+            // Check if there's a transceiver we can use
+            const transceiver = transceivers.find(t => 
+              t.receiver.track?.kind === track.kind && 
+              (t.direction === 'recvonly' || t.direction === 'inactive' || !t.sender.track)
+            );
+            
+            if (transceiver) {
+              console.log(`Using existing transceiver for ${track.kind}, changing direction to sendrecv`);
+              try {
+                transceiver.sender.replaceTrack(track);
+                transceiver.direction = 'sendrecv';
+                needsRenegotiation = true;
+              } catch (err) {
+                console.error('Error using transceiver:', err);
+              }
+            } else {
+              // No existing transceiver, add new track
+              console.log(`Adding new ${track.kind} track for ${odId}`);
+              try {
+                pc.addTrack(track, stream);
+                needsRenegotiation = true;
+              } catch (err) {
+                console.error('Error adding track:', err);
+              }
+            }
+          }
+        });
+
+        // Force renegotiation if we added new tracks or changed directions
+        if (needsRenegotiation && !this.isNegotiating.get(odId)) {
+          console.log(`Triggering renegotiation with ${odId}`);
+          this.renegotiate(odId, pc);
+        }
+      } else {
+        // If stream is null, stop sending but keep receiving
+        senders.forEach(sender => {
+          if (sender.track) {
+            sender.replaceTrack(null).catch(err => {
+              console.error('Error removing track:', err);
+            });
           }
         });
       }
     });
+
+    // Stop previous stream tracks if different
+    if (previousStream && previousStream !== stream) {
+      previousStream.getTracks().forEach(track => {
+        if (!stream || !stream.getTracks().includes(track)) {
+          // Don't stop - the track might still be in use
+        }
+      });
+    }
+  }
+
+  private async renegotiate(targetId: string, pc: RTCPeerConnection) {
+    if (this.isNegotiating.get(targetId)) {
+      console.log('Already negotiating with:', targetId);
+      return;
+    }
+    
+    try {
+      this.isNegotiating.set(targetId, true);
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      console.log('Sending renegotiation offer to:', targetId);
+      this.sendSignal(targetId, { type: 'offer', sdp: offer.sdp });
+    } catch (err) {
+      console.error('Error during renegotiation:', err);
+      this.isNegotiating.set(targetId, false);
+    }
   }
 
   async leave() {
+    console.log('Leaving room');
     // Close all peer connections
     this.peerConnections.forEach(pc => pc.close());
     this.peerConnections.clear();
     this.participants.clear();
+    this.pendingCandidates.clear();
+    this.isNegotiating.clear();
 
     // Unsubscribe from channel
     if (this.channel) {
