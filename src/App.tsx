@@ -291,7 +291,7 @@ function App() {
   const renderCurrentView = () => {
     switch (currentView) {
       case 'dashboard':
-        return <Dashboard studyData={studyData} userName={user.displayName} />;
+        return <Dashboard studyData={studyData} userName={user.displayName} darkMode={darkMode} />;
       case 'timer':
         return (
           <StudyTimer
@@ -300,6 +300,7 @@ function App() {
             onSessionComplete={addStudySession}
             timerState={timerState}
             onTimerStateChange={setTimerState}
+            darkMode={darkMode}
           />
         );
       case 'subjects':
@@ -309,18 +310,19 @@ function App() {
             onAddSubject={addSubject}
             onUpdateSubject={updateSubject}
             onDeleteSubject={deleteSubject}
+            darkMode={darkMode}
           />
         );
       case 'analytics':
-        return <ProgressAnalytics studyData={studyData} />;
+        return <ProgressAnalytics studyData={studyData} darkMode={darkMode} />;
       case 'achievements':
-        return <Achievements studyData={studyData} />;
+        return <Achievements studyData={studyData} darkMode={darkMode} />;
       case 'quiz':
         return <Quiz darkMode={darkMode} />;
       case 'rooms':
         return <StudyRooms userId={user.id} userName={user.displayName} userAvatar={user.avatar} />;
       default:
-        return <Dashboard studyData={studyData} userName={user.displayName} />;
+        return <Dashboard studyData={studyData} userName={user.displayName} darkMode={darkMode} />;
     }
   };
 
