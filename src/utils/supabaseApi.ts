@@ -68,7 +68,8 @@ export const registerUser = async (
 // Login user
 export const loginUser = async (
   email: string,
-  password: string
+  password: string,
+  captchaToken?: string
 ): Promise<{ user: User; token: string }> => {
   if (!isSupabaseConfigured()) {
     throw new Error('Supabase not configured - using offline mode');
@@ -76,7 +77,10 @@ export const loginUser = async (
 
   const { data, error } = await supabase.auth.signInWithPassword({
     email,
-    password
+    password,
+    options: {
+      captchaToken
+    }
   });
 
   if (error) throw new Error(error.message);

@@ -79,7 +79,7 @@ export const Auth: React.FC<AuthProps> = ({ onLogin, darkMode }) => {
           return;
         }
 
-        const result = await loginUser(loginEmail, password);
+        const result = await loginUser(loginEmail, password, captchaToken || undefined);
         playSound('complete');
         onLogin(result.user, result.token);
       }
