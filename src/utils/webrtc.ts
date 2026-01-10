@@ -458,38 +458,48 @@ export class WebRTCManager {
     // Update all peer connections with new tracks
     this.peerConnections.forEach(async (pc, odId) => {
       const senders = pc.getSenders();
-      console.log(`Updating peer ${odId}, senders:`, senders.length, 'state:', pc.connectionState);
+      const transceivers = pc.getTransceivers();
+      console.log(`Updating peer ${odId}, senders:`, senders.length, 'transceivers:', transceivers.length, 'state:', pc.connectionState);
       
-      if (stream && pc.connectionState === 'connected') {
-        let tracksAdded = false;
+      if (stream) {
+        let needsRenegotiation = false;
         
         for (const track of stream.getTracks()) {
-          // Check if we already have a sender for this track kind
+          // First check if we have a sender already sending this track kind
           const existingSender = senders.find(s => s.track?.kind === track.kind);
           
           if (existingSender) {
-            console.log(`Replacing ${track.kind} track for ${odId}`);
+            console.log(`Replacing existing ${track.kind} track for ${odId}`);
             try {
               await existingSender.replaceTrack(track);
             } catch (err) {
               console.error('Error replacing track:', err);
             }
           } else {
-            // Try to find a sender without a track
-            const emptySender = senders.find(s => !s.track && s.track !== null);
-            if (emptySender) {
-              console.log(`Using empty sender for ${track.kind} track`);
+            // Check for a transceiver with matching kind that we can use
+            const transceiver = transceivers.find(t => {
+              const receiverKind = t.receiver?.track?.kind;
+              const senderHasTrack = t.sender?.track;
+              return receiverKind === track.kind && !senderHasTrack;
+            });
+            
+            if (transceiver) {
+              console.log(`Using transceiver for ${track.kind}, setting track and direction`);
               try {
-                await emptySender.replaceTrack(track);
+                await transceiver.sender.replaceTrack(track);
+                if (transceiver.direction === 'recvonly') {
+                  transceiver.direction = 'sendrecv';
+                }
+                needsRenegotiation = true;
               } catch (err) {
-                console.error('Error using empty sender:', err);
+                console.error('Error using transceiver:', err);
               }
             } else {
-              // Add new track
+              // No transceiver available, add new track
               console.log(`Adding new ${track.kind} track for ${odId}`);
               try {
                 pc.addTrack(track, stream);
-                tracksAdded = true;
+                needsRenegotiation = true;
               } catch (err) {
                 console.error('Error adding track:', err);
               }
@@ -497,12 +507,12 @@ export class WebRTCManager {
           }
         }
 
-        // Only renegotiate if we actually added new tracks
-        if (tracksAdded && !this.isNegotiating.get(odId)) {
+        // Renegotiate if needed
+        if (needsRenegotiation && !this.isNegotiating.get(odId) && pc.connectionState === 'connected') {
           console.log(`Triggering renegotiation with ${odId}`);
           await this.renegotiate(odId, pc);
         }
-      } else if (!stream) {
+      } else {
         // If stream is null, remove tracks from senders
         for (const sender of senders) {
           if (sender.track) {
