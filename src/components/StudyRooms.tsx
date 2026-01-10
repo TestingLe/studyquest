@@ -393,8 +393,11 @@ export const StudyRooms: React.FC<StudyRoomsProps> = ({
                 )}
                 <div className="absolute bottom-3 left-3 flex items-center gap-2">
                   <span className={`px-2 py-1 rounded text-xs font-medium ${participant.isSpeaking ? 'bg-green-500 text-white' : 'bg-black/60 text-white'}`}>{participant.odName}</span>
-                  {participant.isMuted && <span className="bg-red-500 text-white px-2 py-1 rounded text-xs">🔇</span>}
-                  {!participant.isMuted && !participant.stream && <span className="bg-yellow-500 text-black px-2 py-1 rounded text-xs">⏳ Connecting...</span>}
+                  {participant.isMuted ? (
+                    <span className="bg-red-500 text-white px-2 py-1 rounded text-xs">🔇</span>
+                  ) : (
+                    <span className="bg-green-500 text-white px-2 py-1 rounded text-xs">🎤</span>
+                  )}
                 </div>
                 {/* Audio element for participant - always render if stream exists */}
                 {participant.stream && (

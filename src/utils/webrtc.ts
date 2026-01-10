@@ -187,7 +187,8 @@ export class WebRTCManager {
   private handlePresenceSync(state: any) {
     const currentUsers = Object.keys(state);
     
-    // Add new participants
+    // Add new participants only - don't update existing ones from presence
+    // Media state updates come from broadcast which is more reliable
     currentUsers.forEach(odId => {
       if (odId !== this.odId && !this.participants.has(odId)) {
         const userData = state[odId][0];
@@ -203,16 +204,8 @@ export class WebRTCManager {
           isMuted: userData.isMuted !== false, // Default to muted
           isVideoOn: userData.isVideoOn === true
         });
-      } else if (odId !== this.odId) {
-        // Update existing participant's media state from presence
-        const userData = state[odId][0];
-        const participant = this.participants.get(odId);
-        if (participant) {
-          participant.isMuted = userData.isMuted !== false;
-          participant.isVideoOn = userData.isVideoOn === true;
-          this.participants.set(odId, participant);
-        }
       }
+      // Don't update existing participants from presence - use broadcast instead
     });
 
     // Remove left participants
