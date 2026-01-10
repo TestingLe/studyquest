@@ -110,7 +110,7 @@ export const Auth: React.FC<AuthProps> = ({ onLogin, darkMode }) => {
         {/* Header */}
         <div className="bg-gradient-to-r from-indigo-500 to-purple-600 p-8 text-center">
           <div className="text-5xl mb-3">🎯</div>
-          <h1 className="text-2xl font-bold text-white">StudyQuest</h1>
+          <h1 className="text-2xl font-bold text-white">StudyFlow</h1>
           <p className="text-indigo-100 mt-1">Level up your learning</p>
         </div>
 

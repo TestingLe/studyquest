@@ -56,7 +56,7 @@ export const Navigation: React.FC<NavigationProps> = ({
           <div className="flex items-center space-x-8">
             <div className="flex items-center space-x-2 cursor-pointer" onClick={() => onViewChange('dashboard')}>
               <span className="text-2xl">🎯</span>
-              <h1 className={`text-xl font-bold ${darkMode ? 'text-indigo-400' : 'text-indigo-600'}`}>StudyQuest</h1>
+              <h1 className={`text-xl font-bold ${darkMode ? 'text-indigo-400' : 'text-indigo-600'}`}>StudyFlow</h1>
             </div>
             
             <div className="hidden lg:flex space-x-1">

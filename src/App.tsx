@@ -266,7 +266,7 @@ function App() {
         {darkMode && <StarryBackground />}
         <div className="text-center relative z-10">
           <div className="text-6xl mb-4 animate-bounce">🎯</div>
-          <h1 className={`text-2xl font-bold ${darkMode ? 'text-white' : 'text-indigo-600'}`}>StudyQuest</h1>
+          <h1 className={`text-2xl font-bold ${darkMode ? 'text-white' : 'text-indigo-600'}`}>StudyFlow</h1>
           <p className={`mt-2 ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>Loading...</p>
         </div>
       </div>
