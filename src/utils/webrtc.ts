@@ -221,7 +221,20 @@ export class WebRTCManager {
   private async initiateCall(targetId: string, userData: any) {
     console.log('Initiating call to:', targetId);
     
+    // Check if we already have an active connection
+    const existingPc = this.peerConnections.get(targetId);
+    if (existingPc && existingPc.connectionState !== 'closed' && existingPc.connectionState !== 'failed') {
+      console.log('Already have connection to:', targetId, 'state:', existingPc.connectionState);
+      return;
+    }
+    
     const pc = this.createPeerConnection(targetId, userData);
+    
+    // Check if this is a reused connection that already has transceivers
+    if (pc.getTransceivers().length > 0) {
+      console.log('Connection already has transceivers, skipping offer');
+      return;
+    }
     
     // Always add both audio and video transceivers as sendrecv
     // This allows either party to start sending at any time without renegotiation
@@ -255,12 +268,20 @@ export class WebRTCManager {
   }
 
   private createPeerConnection(targetId: string, userData: any): RTCPeerConnection {
-    // Close existing connection if any
+    // Check if existing connection is still usable
     const existingPc = this.peerConnections.get(targetId);
+    if (existingPc && existingPc.connectionState !== 'closed' && existingPc.connectionState !== 'failed') {
+      console.log('Reusing existing peer connection for:', targetId, 'state:', existingPc.connectionState);
+      return existingPc;
+    }
+    
+    // Close existing connection if it's in a bad state
     if (existingPc) {
+      console.log('Closing old peer connection for:', targetId, 'state:', existingPc.connectionState);
       existingPc.close();
     }
 
+    console.log('Creating new peer connection for:', targetId);
     const pc = new RTCPeerConnection(rtcConfig);
     this.peerConnections.set(targetId, pc);
     this.pendingCandidates.set(targetId, []);
