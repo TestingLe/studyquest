@@ -287,17 +287,26 @@ export class WebRTCManager {
 
     // Handle incoming tracks
     pc.ontrack = (event) => {
-      console.log('Received track from:', targetId, 'kind:', event.track.kind);
+      console.log('Received track from:', targetId, 'kind:', event.track.kind, 'enabled:', event.track.enabled);
       const participant = this.participants.get(targetId);
       if (participant) {
         // Use the first stream or create one from the track
         const stream = event.streams[0] || new MediaStream([event.track]);
         participant.stream = stream;
-        participant.isVideoOn = stream.getVideoTracks().some(t => t.enabled);
-        participant.isMuted = !stream.getAudioTracks().some(t => t.enabled);
+        
+        // Check actual track states
+        const hasVideo = stream.getVideoTracks().length > 0 && stream.getVideoTracks().some(t => t.enabled);
+        const hasAudio = stream.getAudioTracks().length > 0;
+        
+        participant.isVideoOn = hasVideo;
+        // Don't override isMuted from track state - use broadcast state instead
+        // participant.isMuted is controlled by broadcastMediaState
+        
         this.participants.set(targetId, participant);
-        console.log('Updated participant stream:', targetId, 'video:', participant.isVideoOn, 'audio:', !participant.isMuted);
+        console.log('Updated participant stream:', targetId, 'hasVideo:', hasVideo, 'hasAudio:', hasAudio);
         this.onParticipantsChange(new Map(this.participants));
+      } else {
+        console.log('Participant not found for track:', targetId);
       }
     };
 
@@ -444,81 +453,68 @@ export class WebRTCManager {
 
   updateStream(stream: MediaStream | null) {
     console.log('Updating stream:', stream ? `${stream.getTracks().length} tracks` : 'null');
-    const previousStream = this.localStream;
     this.localStream = stream;
     
     // Update all peer connections with new tracks
     this.peerConnections.forEach(async (pc, odId) => {
       const senders = pc.getSenders();
-      const transceivers = pc.getTransceivers();
-      console.log(`Updating peer ${odId}, senders:`, senders.length, 'transceivers:', transceivers.length, 'state:', pc.connectionState);
+      console.log(`Updating peer ${odId}, senders:`, senders.length, 'state:', pc.connectionState);
       
-      if (stream) {
-        let needsRenegotiation = false;
+      if (stream && pc.connectionState === 'connected') {
+        let tracksAdded = false;
         
-        stream.getTracks().forEach(track => {
-          // First try to find an existing sender with a track of the same kind
-          const sender = senders.find(s => s.track?.kind === track.kind);
+        for (const track of stream.getTracks()) {
+          // Check if we already have a sender for this track kind
+          const existingSender = senders.find(s => s.track?.kind === track.kind);
           
-          if (sender) {
+          if (existingSender) {
             console.log(`Replacing ${track.kind} track for ${odId}`);
-            sender.replaceTrack(track).catch(err => {
+            try {
+              await existingSender.replaceTrack(track);
+            } catch (err) {
               console.error('Error replacing track:', err);
-            });
+            }
           } else {
-            // Check if there's a transceiver we can use
-            const transceiver = transceivers.find(t => 
-              t.receiver.track?.kind === track.kind && 
-              (t.direction === 'recvonly' || t.direction === 'inactive' || !t.sender.track)
-            );
-            
-            if (transceiver) {
-              console.log(`Using existing transceiver for ${track.kind}, changing direction to sendrecv`);
+            // Try to find a sender without a track
+            const emptySender = senders.find(s => !s.track && s.track !== null);
+            if (emptySender) {
+              console.log(`Using empty sender for ${track.kind} track`);
               try {
-                transceiver.sender.replaceTrack(track);
-                transceiver.direction = 'sendrecv';
-                needsRenegotiation = true;
+                await emptySender.replaceTrack(track);
               } catch (err) {
-                console.error('Error using transceiver:', err);
+                console.error('Error using empty sender:', err);
               }
             } else {
-              // No existing transceiver, add new track
+              // Add new track
               console.log(`Adding new ${track.kind} track for ${odId}`);
               try {
                 pc.addTrack(track, stream);
-                needsRenegotiation = true;
+                tracksAdded = true;
               } catch (err) {
                 console.error('Error adding track:', err);
               }
             }
           }
-        });
-
-        // Force renegotiation if we added new tracks or changed directions
-        if (needsRenegotiation && !this.isNegotiating.get(odId)) {
-          console.log(`Triggering renegotiation with ${odId}`);
-          this.renegotiate(odId, pc);
         }
-      } else {
-        // If stream is null, stop sending but keep receiving
-        senders.forEach(sender => {
+
+        // Only renegotiate if we actually added new tracks
+        if (tracksAdded && !this.isNegotiating.get(odId)) {
+          console.log(`Triggering renegotiation with ${odId}`);
+          await this.renegotiate(odId, pc);
+        }
+      } else if (!stream) {
+        // If stream is null, remove tracks from senders
+        for (const sender of senders) {
           if (sender.track) {
-            sender.replaceTrack(null).catch(err => {
+            try {
+              await sender.replaceTrack(null);
+            } catch (err) {
               console.error('Error removing track:', err);
-            });
+            }
           }
-        });
+        }
       }
     });
-
-    // Stop previous stream tracks if different
-    if (previousStream && previousStream !== stream) {
-      previousStream.getTracks().forEach(track => {
-        if (!stream || !stream.getTracks().includes(track)) {
-          // Don't stop - the track might still be in use
-        }
-      });
-    }
   }
 
   private async renegotiate(targetId: string, pc: RTCPeerConnection) {
