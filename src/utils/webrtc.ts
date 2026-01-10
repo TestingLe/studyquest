@@ -223,14 +223,10 @@ export class WebRTCManager {
     
     const pc = this.createPeerConnection(targetId, userData);
     
-    // Always add both audio and video transceivers in consistent order
-    // This ensures m-line order is the same on both peers
-    const audioTransceiver = pc.addTransceiver('audio', { 
-      direction: this.localStream?.getAudioTracks().length ? 'sendrecv' : 'recvonly' 
-    });
-    const videoTransceiver = pc.addTransceiver('video', { 
-      direction: this.localStream?.getVideoTracks().length ? 'sendrecv' : 'recvonly' 
-    });
+    // Always add both audio and video transceivers as sendrecv
+    // This allows either party to start sending at any time without renegotiation
+    const audioTransceiver = pc.addTransceiver('audio', { direction: 'sendrecv' });
+    const videoTransceiver = pc.addTransceiver('video', { direction: 'sendrecv' });
     
     // Add local tracks to transceivers if available
     if (this.localStream) {
@@ -385,26 +381,25 @@ export class WebRTCManager {
         
         await pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp: data.sdp }));
         
-        // Now add local tracks to the transceivers created by the offer
-        if (this.localStream) {
-          const transceivers = pc.getTransceivers();
-          for (const transceiver of transceivers) {
+        // Set all transceivers to sendrecv and add local tracks if available
+        const transceivers = pc.getTransceivers();
+        for (const transceiver of transceivers) {
+          // Ensure direction allows sending
+          if (transceiver.direction === 'recvonly') {
+            transceiver.direction = 'sendrecv';
+          }
+          
+          if (this.localStream) {
             const kind = transceiver.receiver.track?.kind;
             if (kind === 'audio') {
               const audioTrack = this.localStream.getAudioTracks()[0];
               if (audioTrack && !transceiver.sender.track) {
                 await transceiver.sender.replaceTrack(audioTrack);
-                if (transceiver.direction === 'recvonly') {
-                  transceiver.direction = 'sendrecv';
-                }
               }
             } else if (kind === 'video') {
               const videoTrack = this.localStream.getVideoTracks()[0];
               if (videoTrack && !transceiver.sender.track) {
                 await transceiver.sender.replaceTrack(videoTrack);
-                if (transceiver.direction === 'recvonly') {
-                  transceiver.direction = 'sendrecv';
-                }
               }
             }
           }
@@ -498,95 +493,34 @@ export class WebRTCManager {
     this.localStream = stream;
     
     // Update all peer connections with new tracks using existing transceivers
+    // Since we always create sendrecv transceivers, we just need to replaceTrack
+    // No renegotiation needed!
     this.peerConnections.forEach(async (pc, odId) => {
       const transceivers = pc.getTransceivers();
-      console.log(`Updating peer ${odId}, transceivers:`, transceivers.length, 'state:', pc.connectionState, 'signalingState:', pc.signalingState);
+      console.log(`Updating peer ${odId}, transceivers:`, transceivers.length, 'state:', pc.connectionState);
       
-      if (stream) {
-        let needsRenegotiation = false;
+      for (const transceiver of transceivers) {
+        const kind = transceiver.receiver.track?.kind;
         
-        for (const transceiver of transceivers) {
-          const kind = transceiver.receiver.track?.kind;
-          
-          if (kind === 'audio') {
-            const audioTrack = stream.getAudioTracks()[0];
-            if (audioTrack) {
-              console.log(`Setting audio track for ${odId}`);
-              try {
-                await transceiver.sender.replaceTrack(audioTrack);
-                if (transceiver.direction === 'recvonly') {
-                  transceiver.direction = 'sendrecv';
-                  needsRenegotiation = true;
-                }
-              } catch (err) {
-                console.error('Error setting audio track:', err);
-              }
-            }
-          } else if (kind === 'video') {
-            const videoTrack = stream.getVideoTracks()[0];
-            if (videoTrack) {
-              console.log(`Setting video track for ${odId}`);
-              try {
-                await transceiver.sender.replaceTrack(videoTrack);
-                if (transceiver.direction === 'recvonly') {
-                  transceiver.direction = 'sendrecv';
-                  needsRenegotiation = true;
-                }
-              } catch (err) {
-                console.error('Error setting video track:', err);
-              }
-            }
+        if (kind === 'audio') {
+          const audioTrack = stream?.getAudioTracks()[0] || null;
+          console.log(`Setting audio track for ${odId}:`, audioTrack ? 'has track' : 'null');
+          try {
+            await transceiver.sender.replaceTrack(audioTrack);
+          } catch (err) {
+            console.error('Error setting audio track:', err);
           }
-        }
-
-        // Only renegotiate if we changed direction and connection is stable
-        if (needsRenegotiation && 
-            !this.isNegotiating.get(odId) && 
-            pc.signalingState === 'stable' &&
-            pc.connectionState === 'connected') {
-          console.log(`Triggering renegotiation with ${odId}`);
-          setTimeout(() => {
-            if (pc.signalingState === 'stable' && !this.isNegotiating.get(odId)) {
-              this.renegotiate(odId, pc);
-            }
-          }, 100);
-        }
-      } else {
-        // If stream is null, remove tracks from senders
-        for (const transceiver of transceivers) {
-          if (transceiver.sender.track) {
-            try {
-              await transceiver.sender.replaceTrack(null);
-            } catch (err) {
-              console.error('Error removing track:', err);
-            }
+        } else if (kind === 'video') {
+          const videoTrack = stream?.getVideoTracks()[0] || null;
+          console.log(`Setting video track for ${odId}:`, videoTrack ? 'has track' : 'null');
+          try {
+            await transceiver.sender.replaceTrack(videoTrack);
+          } catch (err) {
+            console.error('Error setting video track:', err);
           }
         }
       }
     });
-  }
-
-  private async renegotiate(targetId: string, pc: RTCPeerConnection) {
-    if (this.isNegotiating.get(targetId)) {
-      console.log('Already negotiating with:', targetId);
-      return;
-    }
-    
-    if (pc.signalingState !== 'stable') {
-      console.log('Cannot renegotiate - signaling state is:', pc.signalingState);
-      return;
-    }
-    
-    try {
-      this.isNegotiating.set(targetId, true);
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      console.log('Sending renegotiation offer to:', targetId);
-      this.sendSignal(targetId, { type: 'offer', sdp: offer.sdp });
-    } catch (err) {
-      console.error('Error during renegotiation:', err);
-      this.isNegotiating.set(targetId, false);
-    }
   }
 
   async leave() {
