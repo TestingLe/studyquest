@@ -40,8 +40,8 @@ export const Auth: React.FC<AuthProps> = ({ onLogin, darkMode }) => {
     setError('');
     setLoading(true);
 
-    // Check captcha for registration (not login)
-    if (!isLogin && !captchaToken) {
+    // Check captcha for both login and registration
+    if (!captchaToken) {
       setError('Please complete the captcha verification');
       setLoading(false);
       return;
@@ -211,19 +211,17 @@ export const Auth: React.FC<AuthProps> = ({ onLogin, darkMode }) => {
             </div>
           )}
 
-          {/* hCaptcha - only show for registration */}
-          {!isLogin && (
-            <div className="flex justify-center">
-              <HCaptcha
-                ref={captchaRef}
-                sitekey={HCAPTCHA_SITE_KEY}
-                onVerify={(token) => setCaptchaToken(token)}
-                onExpire={() => setCaptchaToken(null)}
-                onError={() => setCaptchaToken(null)}
-                theme={darkMode ? 'dark' : 'light'}
-              />
-            </div>
-          )}
+          {/* hCaptcha - show for both login and registration */}
+          <div className="flex justify-center">
+            <HCaptcha
+              ref={captchaRef}
+              sitekey={HCAPTCHA_SITE_KEY}
+              onVerify={(token) => setCaptchaToken(token)}
+              onExpire={() => setCaptchaToken(null)}
+              onError={() => setCaptchaToken(null)}
+              theme={darkMode ? 'dark' : 'light'}
+            />
+          </div>
 
           <button
             type="submit"

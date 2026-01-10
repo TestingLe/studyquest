@@ -9,6 +9,7 @@ import { Quiz } from './components/Quiz';
 import { Navigation } from './components/Navigation';
 import { StarryBackground } from './components/StarryBackground';
 import { Auth } from './components/Auth';
+import LandingPage from './components/LandingPage';
 import { checkSession, saveStudyData, loadStudyData, logoutUser } from './utils/supabaseApi';
 import { isSupabaseConfigured } from './utils/supabase';
 import type { StudyData, Subject, StudySession } from './types';
@@ -50,6 +51,7 @@ const defaultStudyData: StudyData = {
 function App() {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [showLanding, setShowLanding] = useState(true);
   const [currentView, setCurrentView] = useState<string>('dashboard');
   const [darkMode, setDarkMode] = useState<boolean>(() => {
     const saved = localStorage.getItem('studyquest-darkmode');
@@ -273,6 +275,11 @@ function App() {
 
   // Show auth screen if not logged in
   if (!user) {
+    // Show landing page first
+    if (showLanding) {
+      return <LandingPage onGetStarted={() => setShowLanding(false)} darkMode={darkMode} />;
+    }
+    
     return (
       <>
         {darkMode && <StarryBackground />}
