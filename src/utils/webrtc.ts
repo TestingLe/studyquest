@@ -365,6 +365,16 @@ export class WebRTCManager {
         pc = this.createPeerConnection(from, {});
       }
 
+      // Handle glare - if we're also trying to send an offer, use "polite peer" pattern
+      // The peer with the higher ID is "impolite" and ignores incoming offers when negotiating
+      const isPolite = this.odId < from;
+      const offerCollision = this.isNegotiating.get(from) || pc.signalingState !== 'stable';
+      
+      if (offerCollision && !isPolite) {
+        console.log('Ignoring offer due to glare (we are impolite peer)');
+        return;
+      }
+
       // Add local tracks if available
       if (this.localStream) {
         const senders = pc.getSenders();
@@ -378,6 +388,12 @@ export class WebRTCManager {
       }
 
       try {
+        // If we have a local description pending, rollback first
+        if (pc.signalingState === 'have-local-offer') {
+          console.log('Rolling back local offer to accept remote offer');
+          await pc.setLocalDescription({ type: 'rollback' });
+        }
+        
         await pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp: data.sdp }));
         
         // Add any pending ICE candidates
@@ -395,7 +411,18 @@ export class WebRTCManager {
         console.error('Error handling offer:', err);
       }
 
-    } else if (data.type === 'answer' && pc) {
+    } else if (data.type === 'answer') {
+      if (!pc) {
+        console.log('No peer connection for answer from:', from);
+        return;
+      }
+      
+      // Only accept answer if we're expecting one
+      if (pc.signalingState !== 'have-local-offer') {
+        console.log('Ignoring answer - not in have-local-offer state, current state:', pc.signalingState);
+        return;
+      }
+      
       try {
         await pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: data.sdp }));
         this.isNegotiating.set(from, false);
@@ -409,6 +436,7 @@ export class WebRTCManager {
         console.log('Answer processed from:', from);
       } catch (err) {
         console.error('Error handling answer:', err);
+        this.isNegotiating.set(from, false);
       }
 
     } else if (data.type === 'ice') {
